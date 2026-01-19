@@ -8,7 +8,7 @@ This version has a new `config_compliance` view, which can be updated on the Ama
 
 1. Open the Amazon Athena Console on the Log Archive account, in the region where you deployed the dashboard.
 1. Select the `cid_crcd_database` database.
-1. Execute the following SQL on a new Query tab.
+1. Execute the following SQL on a new Query tab (the dashboard will show correct data after the next scheduled dataset refresh).
 
 ```sql
 CREATE OR REPLACE VIEW "config_compliance" AS 
