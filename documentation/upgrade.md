@@ -4,67 +4,32 @@ With the exception of the cases reported here, you should remove the dashboard c
 ## Upgrade to v4.0.2
 
 ### Upgrade to v4.0.2 from v4.0.1
-This version has a new `config_compliance` view, which can be updated on the Amazon Athena Console.
+This version has a new `config_compliance` view.
 
-1. Open the Amazon Athena Console on the Log Archive account, in the region where you deployed the dashboard.
-1. Select the `cid_crcd_database` database.
-1. Execute the following SQL on a new Query tab (the dashboard will show correct data after the next scheduled dataset refresh).
+1. Open AWS CloudShell on the Log Archive account, in the region where you deployed the dashboard.
+1. Execute the following command:
 
-```sql
-CREATE OR REPLACE VIEW "config_compliance" AS 
-WITH
-  conformance_packs AS (
-   SELECT
-     ARBITRARY("configurationItem"."resourceId") "ConformancePackId"
-   , ARBITRARY("configurationItem"."resourceName") "ConformancePackName"
-   , "json_extract_scalar"(rule, '$.configRuleName') "ConformancePackRuleName"
-   FROM
-     ((cid_crcd_config
-   CROSS JOIN UNNEST("configurationitems") t (configurationItem))
-   CROSS JOIN UNNEST(CAST("json_extract"("configurationItem"."configuration", '$.configRuleList') AS array(json))) u (rule))
-   WHERE (("configurationItem"."resourcetype" = 'AWS::Config::ConformancePackCompliance') AND (((CAST(date_parse("dt", '%Y-%m-%d') AS "Date") = date_add('day', -1, current_date)) OR (CAST(date_parse("dt", '%Y-%m-%d') AS "Date") = last_day_of_month(CAST(date_parse("dt", '%Y-%m-%d') AS "Date")))) AND (CAST(date_parse("dt", '%Y-%m-%d') AS "Date") >= last_day_of_month(date_add('month', -5, current_date)))))
-   GROUP BY "json_extract_scalar"(rule, '$.configRuleName')
-) 
-, resource_compliance AS (
-   SELECT
-     "accountId" "AccountId"
-   , "region" "Region"
-   , CAST(date_parse("dt", '%Y-%m-%d') AS "Date") "ComplianceSampleDate"
-   , MAX(CAST(parse_datetime("configurationItem"."configurationitemcapturetime", 'yyyy-MM-dd''T''HH:mm:ss.SSSZ') AS timestamp)) "ConfigItemCaptureTime"
-   , MAX_BY("configurationItem"."resourceId", "configurationItem"."configurationitemcapturetime") "ConfigEventResourceId"
-   , MAX_BY("json_extract_scalar"("configurationItem"."configuration", '$.targetResourceType'), "configurationItem"."configurationitemcapturetime") "ResourceType"
-   , MAX_BY("json_extract_scalar"(rule, '$.complianceType'), "configurationItem"."configurationitemcapturetime") "ComplianceType"
-   , "json_extract_scalar"(rule, '$.configRuleId') "RuleId"
-   , ARBITRARY("json_extract_scalar"(rule, '$.configRuleName')) "RuleName"
-   , "json_extract_scalar"("configurationItem"."configuration", '$.targetResourceId') "ResourceId"
-   FROM
-     ((cid_crcd_config
-   CROSS JOIN UNNEST("configurationitems") t (configurationItem))
-   CROSS JOIN UNNEST(CAST("json_extract"("configurationItem"."configuration", '$.configRuleList') AS array(json))) u (rule))
-   WHERE (("configurationItem"."resourcetype" = 'AWS::Config::ResourceCompliance') AND (((CAST(date_parse("dt", '%Y-%m-%d') AS "Date") = date_add('day', -1, current_date)) OR (CAST(date_parse("dt", '%Y-%m-%d') AS "Date") = last_day_of_month(CAST(date_parse("dt", '%Y-%m-%d') AS "Date")))) AND (CAST(date_parse("dt", '%Y-%m-%d') AS "Date") >= last_day_of_month(date_add('month', -5, current_date)))) AND (datasource = 'ConfigSnapshot'))
-   GROUP BY "AccountId", "Region", "dt", "json_extract_scalar"(rule, '$.configRuleId'), "json_extract_scalar"("configurationItem"."configuration", '$.targetResourceId')
-) 
-SELECT
-  rc.AccountId
-, rc.Region
-, rc.ComplianceSampleDate
-, rc.ConfigItemCaptureTime
-, rc.ConfigEventResourceId
-, rc.ResourceType
-, rc.ComplianceType
-, rc.RuleId
-, rc.RuleName
-, (CASE WHEN REGEXP_LIKE("RuleName", 'AWSControlTower') THEN "RuleName" WHEN REGEXP_LIKE("RuleName", 'securityhub') THEN REGEXP_REPLACE("RuleName", '-[^-]*$', '') WHEN (cp.ConformancePackId IS NULL) THEN "RuleName" ELSE REGEXP_REPLACE("RuleName", '-[^-]*$', '') END) "NormalizedRuleName"
-, rc.ResourceId
-, cp.ConformancePackId
-, cp.ConformancePackName
-, (CASE WHEN (NOT REGEXP_LIKE("ConformancePackName", 'OrgConformsPack')) THEN "ConformancePackName" ELSE REGEXP_REPLACE("ConformancePackName", '-[^-]*$', '') END) "NormalizedConformancePackName"
-, concat(concat(concat(concat(rc.AccountId, '-'), rc.Region), '-'), rc.ResourceId) "PKResourceId"
-, concat(concat(concat(concat(rc.AccountId, '-'), rc.Region), '-'), rc.RuleId) "PKRuleId"
-FROM
-  (resource_compliance rc
-LEFT JOIN conformance_packs cp ON (cp.ConformancePackRuleName = rc.RuleName))
 ```
+ cid-cmd update \
+   --recursive \
+   --resources 'https://raw.githubusercontent.com/aws-samples/config-resource-compliance-dashboard/refs/heads/main/dashboard_template/cid-crcd.yaml' \
+   --dashboard-id 'cid-crcd' \
+   --athena-database 'cid_crcd_database' \
+   --athena-workgroup 'crcd-dashboard'
+```
+
+3. The `cid-cmd` tool will ask you to confirm the values of parameters `tag1`, `tag2`, `tag3` and `tag4`. Their current value will be displayed.
+4. The `cid-cmd` tool will then analyze each Athena view and identify an updated version of `config_compliance`.
+     - **If `cid-cmd` does not analyze the views, make sure you used the option `--recursive` in the CLI command**
+     - The changes will be highlighted in color, expect to see `configrulelist` being replaced by `configRuleList` within the first lines of the view definition.
+     ```
+      -    CROSS JOIN UNNEST(CAST(json_extract(configurationItem.configuration, '$.configrulelist') AS array(json))) u (rule))
+      +    CROSS JOIN UNNEST(CAST(json_extract(configurationItem.configuration, '$.configRuleList') AS array(json))) u (rule))
+     ```
+5. Select `proceed and override`.
+1. When prompted `[timezone] Please select timezone for datasets scheduled refresh.:` select the time zone for dataset scheduled refresh in your Region (it is already preselected). The tool will not find other updates for the Athena views. 
+1. When prompted `Select taxonomy fields to add as dashboard filters and group by fields` select `Looks good` without adding taxonomy items. Taxonomy is not supported by the dashboard.
+1. The tool will update the dashboard definition and terminate.
 
 ## Upgrade to v4.0.2 from earlier versions
 You have to destroy the resources of the current versions and redeploy.
@@ -89,7 +54,7 @@ You only need to redeploy the frontend resources with the `cid-cmd` tool. You ca
 1. Ensure the [environment variables](https://docs.aws.amazon.com/lambda/latest/dg/configuration-envvars.html) `PARTITION_CONFIG_SNAPSHOT_RECORDS` and `PARTITION_CONFIG_HISTORY_RECORDS` are both set to `1`.
 
 #### Step 2: Uninstall the dashboard frontend with the cid-cmd tool
-1. On the same AWS account and region, open Amazon CloudShell
+1. On the same AWS account and region, open AWS CloudShell
 1. Execute the following command to delete the dashboard:
 
 ```
